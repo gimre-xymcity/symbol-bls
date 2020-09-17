@@ -43,6 +43,6 @@ namespace catapult { namespace crypto {
 		uint8_t m_buffer[8 * 64 * 2 * 3];
 	};
 
-	/// Hash \a bufferList to \a point on curve.
-	void HashToCurveG2(G2Point& point, std::initializer_list<const RawBuffer> buffersList);
+	/// Hash \a bufferList to \a point on curve using tag (\a dstTag).
+	void HashToCurveG2(G2Point& point, const RawString& dstTag, std::initializer_list<const RawBuffer> buffersList);
 }}

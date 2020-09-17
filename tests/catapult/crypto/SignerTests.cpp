@@ -43,12 +43,21 @@ namespace catapult { namespace crypto {
 		public:
 			static constexpr auto GenerateKeyPair = test::GenerateKeyPair;
 
-			static auto GetPayloadForNonCanonicalSignatureTest() {
-				// the value 30 in the payload ensures that the encodedS part of the signature is < 2 ^ 253 after adding the group order
-				return std::array<uint8_t, 10>{ { 1, 2, 3, 4, 5, 6, 7, 8, 9, 30 } };
+			static bool CoerceToBool(bool result) {
+				return result;
 			}
 
-			static auto MakeNonCanonical(const Signature& canonicalSignature) {
+			static auto GenerateKeyPairForNonCanonicalSignatureTest() {
+				// non-canonincal signature test does not depend on key used
+				return GenerateKeyPair();
+			}
+
+			static auto GetPayloadsForNonCanonicalSignatureTest() {
+				// the value 30 in the payload ensures that the encodedS part of the signature is < 2 ^ 253 after adding the group order
+				return std::vector{ std::array<uint8_t, 10>{ { 1, 2, 3, 4, 5, 6, 7, 8, 9, 30 } } };
+			}
+
+			static auto MakeNonCanonical(const Signature& canonicalSignature, size_t) {
 				// this is signature with group order added to 'encodedS' part of signature
 				auto nonCanonicalSignature = canonicalSignature;
 				test::ScalarAddGroupOrder(nonCanonicalSignature.data() + Signature::Size / 2);
@@ -235,8 +244,8 @@ namespace catapult { namespace crypto {
 
 	VERIFY_MULTI_TEST(SignedPayloadsCannotBeVerifiedAsBatches_NonCanonicalSignature) {
 		AssertSignedPayloadsCannotBeVerifiedAsBatches<TTraits>([](auto& signatureInputs, auto index) {
-			auto payload = SignVerifyTraits::GetPayloadForNonCanonicalSignatureTest();
-			auto nonCanonicalSignature = SignVerifyTraits::MakeNonCanonical(SignPayload(test::GenerateKeyPair(), payload));
+			auto payload = SignVerifyTraits::GetPayloadsForNonCanonicalSignatureTest()[0];
+			auto nonCanonicalSignature = SignVerifyTraits::MakeNonCanonical(SignPayload(test::GenerateKeyPair(), payload), 0);
 
 			const_cast<Signature&>(signatureInputs[index].Signature) = nonCanonicalSignature;
 		});

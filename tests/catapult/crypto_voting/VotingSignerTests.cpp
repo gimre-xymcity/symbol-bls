@@ -20,10 +20,21 @@
 **/
 
 #include "catapult/crypto_voting/VotingSigner.h"
+#include "catapult/utils/RandomGenerator.h"
 #include "tests/test/crypto/CurveUtils.h"
 #include "tests/test/crypto/SignVerifyTests.h"
 #include "tests/TestHarness.h"
 #include <numeric>
+
+#if defined(__clang__) || defined(__GNUC__)
+#define C99
+#endif
+
+extern "C" {
+#include <amcl/config_curve_BLS381.h>
+#include <amcl/bls_BLS381.h>
+#include <amcl/big_512_56.h>
+}
 
 namespace catapult { namespace crypto {
 
@@ -32,32 +43,64 @@ namespace catapult { namespace crypto {
 	// region basic sign verify tests
 
 	namespace {
+		constexpr uint8_t Coordinate_Mask = 0x1F;
+		constexpr uint8_t Compressed_Bit = 0x80;
+
 		struct SignVerifyTraits {
 		public:
-			using KeyPair = crypto::VotingKeyPair;
-			using Signature = crypto::VotingSignature;
+			using KeyPair = VotingKeyPair;
+			using Signature = VotingSignature;
 
 		public:
-			static crypto::VotingKeyPair GenerateKeyPair() {
-				return VotingKeyPair::FromPrivate(VotingPrivateKey::Generate(test::RandomByte));
+			static VotingKeyPair GenerateKeyPair() {
+				utils::LowEntropyRandomGenerator generator;
+				return VotingKeyPair::FromPrivate(GenerateVotingPrivateKey(generator));
 			}
 
-			static auto GetPayloadForNonCanonicalSignatureTest() {
-				// the value 30 in the payload ensures that the encodedS part of the signature is < 2 ^ 253 after adding the group order
-				return std::array<uint8_t, 10>{ { 1, 2, 3, 4, 5, 6, 7, 8, 9, 30 } };
+			static bool CoerceToBool(VotingVerifyResult result) {
+				return VotingVerifyResult::Success == result;
 			}
 
-			static auto MakeNonCanonical(const Signature& canonicalSignature) {
-				// this is signature with group order added to 'encodedS' part of signature
-				auto ed25519NonCanonicalSignature = canonicalSignature.copyTo<catapult::Signature>();
-				test::ScalarAddGroupOrder(ed25519NonCanonicalSignature.data() + catapult::Signature::Size / 2);
+			static auto GenerateKeyPairForNonCanonicalSignatureTest() {
+				return KeyPair::FromString("0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20");
+			}
 
-				// preserve custom signature padding
-				auto nonCanonicalSignature = ed25519NonCanonicalSignature.copyTo<Signature>();
-				std::memcpy(
-						nonCanonicalSignature.data() + catapult::Signature::Size,
-						canonicalSignature.data() + catapult::Signature::Size,
-						Signature::Size - catapult::Signature::Size);
+			static auto GetPayloadsForNonCanonicalSignatureTest() {
+				// for keypair above, last byte has been selected in a way
+				// that one of the components of the signature + modulus still fits on 381-bits
+				// first payload is for q.a component, second payload for q.b component
+				return std::vector{
+					std::array<uint8_t, 10>{ { 1, 2, 3, 4, 5, 6, 7, 8, 9, 40 } },
+					std::array<uint8_t, 10>{ { 1, 2, 3, 4, 5, 6, 7, 8, 9, 35 } }
+				};
+			}
+
+			static auto MakeNonCanonical(const Signature& canonicalSignature, size_t index) {
+				BIG_384_58 modulus;
+				BIG_384_58_rcopy(modulus, Modulus_BLS381);
+				Signature nonCanonicalSignature = canonicalSignature;
+
+				if (0 == index) {
+					BIG_384_58 xa;
+					BIG_384_58_fromBytes(xa, reinterpret_cast<char*>(&nonCanonicalSignature[MODBYTES_384_58]));
+					BIG_384_58_add(xa, xa, modulus);
+					BIG_384_58_toBytes(reinterpret_cast<char*>(&nonCanonicalSignature[MODBYTES_384_58]), xa);
+				} else if (1 == index) {
+					char bCopy[MODBYTES_384_58];
+					std::memcpy(bCopy, nonCanonicalSignature.data(), MODBYTES_384_58);
+					bCopy[0] &= Coordinate_Mask;
+
+					BIG_384_58 xb;
+					BIG_384_58_fromBytes(xb, bCopy);
+					BIG_384_58_add(xb, xb, modulus);
+					BIG_384_58_toBytes(reinterpret_cast<char*>(&nonCanonicalSignature[0]), xb);
+
+					// fix flags
+					nonCanonicalSignature[0] = nonCanonicalSignature[0] | Compressed_Bit | 0x20;
+				}
+
+				// Sanity:
+				EXPECT_NE(canonicalSignature, nonCanonicalSignature);
 				return nonCanonicalSignature;
 			}
 		};
@@ -69,95 +112,81 @@ namespace catapult { namespace crypto {
 
 	// region test vectors
 
-#define PUBLIC_KEY_PADDING "00000000000000000000000000000000"
-#define SIGNATURE_16_BYTE_PADDING "CACACACACACACACACACACACACACACACA"
-#define SIGNATURE_PADDING SIGNATURE_16_BYTE_PADDING SIGNATURE_16_BYTE_PADDING
-
 	namespace {
 		struct TestVectorsInput {
-			std::vector<std::string> InputData;
+			std::string InputData;
 			std::vector<std::string> PrivateKeys;
 			std::vector<std::string> ExpectedPublicKeys;
 			std::vector<std::string> ExpectedSignatures;
 		};
 
-		// test vectors from rfc8032
-		TestVectorsInput GetTestVectorsInput() {
+		TestVectorsInput GetTestVectorsInputKeys() {
 			TestVectorsInput input;
-			input.InputData = {
-				"",
-				"72",
-				"AF82",
-
-				// long 1023-byte msg
-				"08B8B2B733424243760FE426A4B54908632110A66C2F6591EABD3345E3E4EB98"
-				"FA6E264BF09EFE12EE50F8F54E9F77B1E355F6C50544E23FB1433DDF73BE84D8"
-				"79DE7C0046DC4996D9E773F4BC9EFE5738829ADB26C81B37C93A1B270B20329D"
-				"658675FC6EA534E0810A4432826BF58C941EFB65D57A338BBD2E26640F89FFBC"
-				"1A858EFCB8550EE3A5E1998BD177E93A7363C344FE6B199EE5D02E82D522C4FE"
-				"BA15452F80288A821A579116EC6DAD2B3B310DA903401AA62100AB5D1A36553E"
-				"06203B33890CC9B832F79EF80560CCB9A39CE767967ED628C6AD573CB116DBEF"
-				"EFD75499DA96BD68A8A97B928A8BBC103B6621FCDE2BECA1231D206BE6CD9EC7"
-				"AFF6F6C94FCD7204ED3455C68C83F4A41DA4AF2B74EF5C53F1D8AC70BDCB7ED1"
-				"85CE81BD84359D44254D95629E9855A94A7C1958D1F8ADA5D0532ED8A5AA3FB2"
-				"D17BA70EB6248E594E1A2297ACBBB39D502F1A8C6EB6F1CE22B3DE1A1F40CC24"
-				"554119A831A9AAD6079CAD88425DE6BDE1A9187EBB6092CF67BF2B13FD65F270"
-				"88D78B7E883C8759D2C4F5C65ADB7553878AD575F9FAD878E80A0C9BA63BCBCC"
-				"2732E69485BBC9C90BFBD62481D9089BECCF80CFE2DF16A2CF65BD92DD597B07"
-				"07E0917AF48BBB75FED413D238F5555A7A569D80C3414A8D0859DC65A46128BA"
-				"B27AF87A71314F318C782B23EBFE808B82B0CE26401D2E22F04D83D1255DC51A"
-				"DDD3B75A2B1AE0784504DF543AF8969BE3EA7082FF7FC9888C144DA2AF58429E"
-				"C96031DBCAD3DAD9AF0DCBAAAF268CB8FCFFEAD94F3C7CA495E056A9B47ACDB7"
-				"51FB73E666C6C655ADE8297297D07AD1BA5E43F1BCA32301651339E22904CC8C"
-				"42F58C30C04AAFDB038DDA0847DD988DCDA6F3BFD15C4B4C4525004AA06EEFF8"
-				"CA61783AACEC57FB3D1F92B0FE2FD1A85F6724517B65E614AD6808D6F6EE34DF"
-				"F7310FDC82AEBFD904B01E1DC54B2927094B2DB68D6F903B68401ADEBF5A7E08"
-				"D78FF4EF5D63653A65040CF9BFD4ACA7984A74D37145986780FC0B16AC451649"
-				"DE6188A7DBDF191F64B5FC5E2AB47B57F7F7276CD419C17A3CA8E1B939AE49E4"
-				"88ACBA6B965610B5480109C8B17B80E1B7B750DFC7598D5D5011FD2DCC5600A3"
-				"2EF5B52A1ECC820E308AA342721AAC0943BF6686B64B2579376504CCC493D97E"
-				"6AED3FB0F9CD71A43DD497F01F17C0E2CB3797AA2A2F256656168E6C496AFC5F"
-				"B93246F6B1116398A346F1A641F3B041E989F7914F90CC2C7FFF357876E506B5"
-				"0D334BA77C225BC307BA537152F3F1610E4EAFE595F6D9D90D11FAA933A15EF1"
-				"369546868A7F3A45A96768D40FD9D03412C091C6315CF4FDE7CB68606937380D"
-				"B2EAAA707B4C4185C32EDDCDD306705E4DC1FFC872EEEE475A64DFAC86ABA41C"
-				"0618983F8741C5EF68D3A101E8A3B8CAC60C905C15FC910840B94C00A0B9D0",
-				// test vector sha(abc)
-				"DDAF35A193617ABACC417349AE20413112E6FA4E89A97EA20A9EEEE64B55D39A"
-				"2192992A274FC1A836BA3C23A3FEEBBD454D4423643CE80E2A9AC94FA54CA49F"
-			};
 
 			input.PrivateKeys = {
-				"9D61B19DEFFD5A60BA844AF492EC2CC44449C5697B326919703BAC031CAE7F60",
-				"4CCD089B28FF96DA9DB6C346EC114E0F5B8A319F35ABA624DA8CF6ED4FB8A6FB",
-				"C5AA8DF43F9F837BEDB7442F31DCB7B166D38535076F094B85CE3A2E0B4458F7",
-				"F5E5767CF153319517630F226876B86C8160CC583BC013744C6BF255F5CC0EE5",
-				"833FE62409237B9D62EC77587520911E9A759CEC1D19755B7DA901B96DCA3D42"
+				"65EE8DE6512F3DB4937403D446DFC8FC0B05E245A6A7D670956B0A119F67461F",
+				"6BF1EC345B429ED691C3E705D088446F8D11234C4556909F454B82D276B7B4D0",
+				"221CD859A351AD34423D8F72402D172B97026CB3CDB3D9D67092660CC25FA6F1",
+				"11468904C63C2BB72534B5FA719FB6027B0B7CF5E302B167F4DC83B9EEF41889",
+				"21C1E1BAF6ECAF8C0D18C28818DE5A9756D5594BE8C6C9E838936813DA8B7B54"
 			};
+
 			input.ExpectedPublicKeys = {
-				"D75A980182B10AB7D54BFED3C964073A0EE172F3DAA62325AF021A68F707511A" PUBLIC_KEY_PADDING,
-				"3D4017C3E843895A92B70AA74D1B7EBC9C982CCF2EC4968CC0CD55F12AF4660C" PUBLIC_KEY_PADDING,
-				"FC51CD8E6218A1A38DA47ED00230F0580816ED13BA3303AC5DEB911548908025" PUBLIC_KEY_PADDING,
-				"278117FC144C72340F67D0F2316E8386CEFFBF2B2428C9C51FEF7C597F1D426E" PUBLIC_KEY_PADDING,
-				"EC172B93AD5E563BF4932C70E1245034C35467EF2EFD4D64EBF819683467E2BF" PUBLIC_KEY_PADDING
+				"AA072A3C3241D659BE2C49F31D4A860388B4565A737B7D02227D1E41197885583E15C7225914068B2810D1D067171FC9",
+				"A15534BD60D9EABD987EE72B92D4A1D67FA2439221A7F893B02D4420F341AD519B6C6C382D7E34ED1CD763877E968C62",
+				"92C8CAA9D3B01AFFCC7909EE3205347481390FE35AA87B8C79E261C1E2B3E13F2D79E11017895F78A5C28A4AA092C6BF",
+				"A3F2DA269915329DABE103DD68AD833F9EAB90976F37DF6FA208A94D0869FC99F884BCD6C8AA10C14E6DDF5359A8F39E",
+				"841C72FC5271C2631108045589D836C4C3530C64DABF37986F0988888DBCA0FBD1E34AD700C93AB70547951D8F9CAF93"
 			};
+
+			return input;
+		}
+
+		// test vectors based on:
+		// https://github.com/kwantam/bls_sigs_ref/blob/sgn0_fix/test-vectors/sig_g2_basic/rfc6979
+		TestVectorsInput GetTestVectorsInputSample() {
+			auto input = GetTestVectorsInputKeys();
+			input.InputData = "sample";
+
 			input.ExpectedSignatures = {
-				"E5564300C360AC729086E2CC806E828A84877F1EB8E5D974D873E06522490155"
-				"5FB8821590A33BACC61E39701CF9B46BD25BF5F0595BBE24655141438E7A100B" SIGNATURE_PADDING,
-				"92A009A9F0D4CAB8720E820B5F642540A2B27B5416503F8FB3762223EBDB69DA"
-				"085AC1E43E15996E458F3613D0F11D8C387B2EAEB4302AEEB00D291612BB0C00" SIGNATURE_PADDING,
-				"6291D657DEEC24024827E69C3ABE01A30CE548A284743A445E3680D7DB5AC3AC"
-				"18FF9B538D16F290AE67F760984DC6594A7C15E9716ED28DC027BECEEA1EC40A" SIGNATURE_PADDING,
-				"0AAB4C900501B3E24D7CDF4663326A3A87DF5E4843B2CBDB67CBF6E460FEC350"
-				"AA5371B1508F9F4528ECEA23C436D94B5E8FCD4F681E30A6AC00A9704A188A03" SIGNATURE_PADDING,
-				"DC2A4459E7369633A52B1BF277839A00201009A3EFBF3ECB69BEA2186C26B589"
-				"09351FC9AC90B3ECFDFBC7C66431E0303DCA179C138AC17AD9BEF1177331A704" SIGNATURE_PADDING
+				"ADE4251A0136CCD502D441E47D2DF8462A96CC85ED1720B85A8BF2BE1AA49EEDB96F73297302C5A85599225896AEF1CE"
+				"028A459ADDC39D8617B825C65119FF8D22B437B70C8C36DEF6411102278274816A8C585BD31F8EBFD0BBB3BD66A74A33",
+				"A49DEE0999240934E9A2D49B52E4B6B0F10A3BA51900A46CD110878CD9BC75860239ECFBE1FEC097BFCDB243F931EB93"
+				"09A849A26354FE58A87E3E1C640669FB445CCD90D7E8E064F265991261115257436F44D268F3B249D77ED0D15ED8ED0E",
+				"8891B7054F731CAB4AF712D3BCD51D23158C957C2A4F59DA0C9FFF50344F9CE756E9C7E11247838B3D3A21E28F863F07"
+				"05C0957B81CF84DBC35C040C6CD2C706352D932592A53900E11C59345F4B53E60361D7FB4B5F9A56E6B06DE73CBA1F91",
+				"8FACD1D63AE37EF863FA91947BFF40B6D108C55BA4A0B9808A8CC44CDD776A72CE28D61E8251CACAF9CEDE95CD0792BE"
+				"1750FFCA14786689A55723B86A29CB223E85E2B03DA184C4BE7468E509F93C9184AEFC7AA9BB155178C38FF86702DFDF",
+				"A96761A5B79FA3D20D31CA04CBDB269EE6118C61B4E0F06BD6C348A4DDBE5F71DA6206D6620EEEA65CCF5DD36CEB316A"
+				"1632620D5C509AF48331480FEB134AE815AA1918FA4D39D3D8C362AA86B5508CC1991B8EC11E962959F4D6E2A791402A"
 			};
 
 			// Sanity:
-			EXPECT_EQ(input.InputData.size(), input.PrivateKeys.size());
-			EXPECT_EQ(input.InputData.size(), input.ExpectedPublicKeys.size());
-			EXPECT_EQ(input.InputData.size(), input.ExpectedSignatures.size());
+			EXPECT_EQ(input.PrivateKeys.size(), input.ExpectedPublicKeys.size());
+			EXPECT_EQ(input.PrivateKeys.size(), input.ExpectedSignatures.size());
+			return input;
+		}
+
+		TestVectorsInput GetTestVectorsInputTest() {
+			auto input = GetTestVectorsInputKeys();
+			input.InputData = "test";
+
+			input.ExpectedSignatures = {
+				"B184D62FE3052488A4A56C7301988DB544F12B4F8F34553F4CFF2C3E39322893EB8E34943487C1D6EEAD742F6797DC73"
+				"0E22C4817114D69D3BDC83E3C8EB2242D8B844D5C7CB56F0FF14E6E2CE5892B842D7D653B02E8FC63BFEFC2941F2855B",
+				"950074853757536FA65D215ADE813228F5FED1C94426302DC0380F21CE9D2C22D65ED92CBCA41910CDA40AFCC46061EF"
+				"051B042FF7E3B8277269CE687773B1F64B4FC3FA31292FAD2BC4ABE61FEDD89A734701524DB4778041F79994C85B6ED8",
+				"B2BE787378D0871FE5CFBE3118187FA14E1228ABF8CAE6F07370F0CD8E498F71747245F03B991D5F9542294A60923477"
+				"0EA5BBBA854E37A87435DBD0E03F60CF1E5F16D5FD1A44B6908C56761B85E85C786913F0B490B4F85D1A5E0B679B2C25",
+				"803FF119DABA856FB81800FFF41FB1E435BD3998904C342FA024CE7688C6B518F943568FC7AF8803D804C47962E35B4B"
+				"0BFCD5DE1225F94C239AB7180FDA593814618E4816897B8D6C82F9ECC2D9976742EC5F868EC63B72C6DB25C986C3F339",
+				"98687ABC1CE9F3AB02CA85593BDBCB7EC208255546F6879FEE48A9C66DEC342D39A7DEA254C02BEEFE7F152DB28CDBE8"
+				"1321723F1B2160EA9D1EFA0DD8A8FB46BFD4A1463F4E52E17300F27EFEC6D733FA1B015D4AE9C8484B3D75B075224B2D"
+			};
+
+			// Sanity:
+			EXPECT_EQ(input.PrivateKeys.size(), input.ExpectedPublicKeys.size());
+			EXPECT_EQ(input.PrivateKeys.size(), input.ExpectedSignatures.size());
 			return input;
 		}
 
@@ -167,41 +196,218 @@ namespace catapult { namespace crypto {
 			EXPECT_NO_THROW(Sign(keyPair, payload, signature));
 			return signature;
 		}
-	}
 
-	TEST(TEST_CLASS, SignPassesTestVectors) {
-		// Arrange:
-		auto input = GetTestVectorsInput();
+		void AssertSignPassesTestVectors(const TestVectorsInput& input) {
+			for (auto i = 0u; i < input.ExpectedSignatures.size(); ++i) {
+				// Act:
+				auto keyPair = VotingKeyPair::FromString(input.PrivateKeys[i]);
+				auto payload = RawBuffer{ reinterpret_cast<const uint8_t*>(input.InputData.data()), input.InputData.size() };
+				auto signature = SignPayload(keyPair, payload);
 
-		// Act / Assert:
-		for (auto i = 0u; i < input.InputData.size(); ++i) {
-			// Act:
-			auto keyPair = VotingKeyPair::FromString(input.PrivateKeys[i]);
-			auto signature = SignPayload(keyPair, test::HexStringToVector(input.InputData[i]));
+				// Assert:
+				auto message = "test vector at " + std::to_string(i);
+				EXPECT_EQ(utils::ParseByteArray<VotingKey>(input.ExpectedPublicKeys[i]), keyPair.publicKey()) << message;
+				EXPECT_EQ(utils::ParseByteArray<VotingSignature>(input.ExpectedSignatures[i]), signature) << message;
+			}
+		}
 
-			// Assert:
-			auto message = "test vector at " + std::to_string(i);
-			EXPECT_EQ(utils::ParseByteArray<VotingKey>(input.ExpectedPublicKeys[i]), keyPair.publicKey()) << message;
-			EXPECT_EQ(utils::ParseByteArray<VotingSignature>(input.ExpectedSignatures[i]), signature) << message;
+		void AssertVerifyPassesTestVectors(const TestVectorsInput& input) {
+			for (auto i = 0u; i < input.ExpectedSignatures.size(); ++i) {
+				// Act:
+				auto keyPair = VotingKeyPair::FromString(input.PrivateKeys[i]);
+				auto payload = RawBuffer{ reinterpret_cast<const uint8_t*>(input.InputData.data()), input.InputData.size() };
+				auto signature = SignPayload(keyPair, payload);
+				auto verifyResult = Verify(keyPair.publicKey(), payload, signature);
+
+				// Assert:
+				auto message = "test vector at " + std::to_string(i);
+				EXPECT_EQ(VotingVerifyResult::Success, verifyResult) << message;
+			}
 		}
 	}
 
-	TEST(TEST_CLASS, VerifyPassesTestVectors) {
-		// Arrange:
-		auto input = GetTestVectorsInput();
+	TEST(TEST_CLASS, SignPassesTestVectors_Sample) {
+		AssertSignPassesTestVectors(GetTestVectorsInputSample());
+	}
 
-		// Act / Assert:
-		for (auto i = 0u; i < input.InputData.size(); ++i) {
-			// Act:
-			auto keyPair = VotingKeyPair::FromString(input.PrivateKeys[i]);
-			auto payload = test::HexStringToVector(input.InputData[i]);
+	TEST(TEST_CLASS, SignPassesTestVectors_Test) {
+		AssertSignPassesTestVectors(GetTestVectorsInputTest());
+	}
+
+	TEST(TEST_CLASS, VerifyPassesTestVectors_Sample) {
+		AssertVerifyPassesTestVectors(GetTestVectorsInputSample());
+	}
+
+	TEST(TEST_CLASS, VerifyPassesTestVectors_Test) {
+		AssertVerifyPassesTestVectors(GetTestVectorsInputTest());
+	}
+
+	// endregion
+
+	// region invalid signatures
+
+	namespace {
+		void AssertVerifyRejects(VotingVerifyResult expectedResult, const consumer<VotingKey&, VotingSignature&>& mutate) {
+			// Arrange:
+			auto keyPair = SignVerifyTraits::GenerateKeyPair();
+			auto payload = test::GenerateRandomArray<17>();
 			auto signature = SignPayload(keyPair, payload);
-			auto isVerified = Verify(keyPair.publicKey(), payload, signature);
+
+			// Sanity:
+			auto verifyResult = Verify(keyPair.publicKey(), payload, signature);
+			EXPECT_EQ(VotingVerifyResult::Success, verifyResult);
+
+			// Act:
+			auto publicKey = keyPair.publicKey();
+			mutate(publicKey, signature);
+			verifyResult = Verify(publicKey, payload, signature);
 
 			// Assert:
-			auto message = "test vector at " + std::to_string(i);
-			EXPECT_TRUE(isVerified) << message;
+			EXPECT_EQ(expectedResult, verifyResult) << "verification should fail";
 		}
+	}
+
+	TEST(TEST_CLASS, VerifyRejectsInvalidSignatureFlags) {
+		AssertVerifyRejects(VotingVerifyResult::Failure_Invalid_Signature_Flags, [](const auto&, auto& signature) {
+			signature[0] ^= 0x80;
+		});
+		AssertVerifyRejects(VotingVerifyResult::Failure_Invalid_Signature_Flags, [](const auto&, auto& signature) {
+			signature[0] ^= 0x40;
+		});
+
+		AssertVerifyRejects(VotingVerifyResult::Failure_Invalid_Signature_Flags, [](const auto&, auto& signature) {
+			signature[MODBYTES_384_58] |= 0x80;
+		});
+		AssertVerifyRejects(VotingVerifyResult::Failure_Invalid_Signature_Flags, [](const auto&, auto& signature) {
+			signature[MODBYTES_384_58] |= 0x40;
+		});
+		AssertVerifyRejects(VotingVerifyResult::Failure_Invalid_Signature_Flags, [](const auto&, auto& signature) {
+			signature[MODBYTES_384_58] |= 0x20;
+		});
+	}
+
+	TEST(TEST_CLASS, VerifyRejectsWhenSignatureHasInvalidSign) {
+		AssertVerifyRejects(VotingVerifyResult::Failure_Verification_Failed, [](const auto&, auto& signature) {
+			signature[0] ^= 0x20;
+		});
+	}
+
+	TEST(TEST_CLASS, VerifyRejectsWhenSignatureIsInvalidPoint) {
+		AssertVerifyRejects(VotingVerifyResult::Failure_Signature_Is_Invalid_Point, [](const auto&, auto& signature) {
+			// prepare signature with x-coord=(0,1) that does not result in valid point
+			signature = VotingSignature();
+			signature[0] = 0x80;
+			signature[95] = 1;
+		});
+		AssertVerifyRejects(VotingVerifyResult::Failure_Signature_Is_Invalid_Point, [](const auto&, auto& signature) {
+			// prepare signature with x-coord=(0,1) that does not result in valid point
+			signature = VotingSignature();
+			signature[0] = 0xA0;
+			signature[95] = 1;
+		});
+	}
+
+	TEST(TEST_CLASS, VerifyRejectsWhenSignatureIsNotInSubgroup) {
+		AssertVerifyRejects(VotingVerifyResult::Failure_Signature_Subgroup_Check, [](const auto&, auto& signature) {
+			// prepare signature with x-coord=(0,2), this will result in valid point, but not in subgroup
+			signature = VotingSignature();
+			signature[0] = 0x80;
+			signature[95] = 2;
+		});
+
+		AssertVerifyRejects(VotingVerifyResult::Failure_Signature_Subgroup_Check, [](const auto&, auto& signature) {
+			// prepare signature with x-coord=(0,2), this will result in valid point, but not in subgroup
+			signature = VotingSignature();
+			signature[0] = 0xA0;
+			signature[95] = 2;
+		});
+	}
+
+	// endregion
+
+	// region invalid public key
+
+	TEST(TEST_CLASS, VerifyRejectsInvalidPublicKeyFlags) {
+		AssertVerifyRejects(VotingVerifyResult::Failure_Invalid_Public_Key_Flags, [](auto& key, const auto&) {
+			key[0] ^= 0x80;
+		});
+		AssertVerifyRejects(VotingVerifyResult::Failure_Invalid_Public_Key_Flags, [](auto& key, const auto&) {
+			key[0] ^= 0x40;
+		});
+	}
+
+	TEST(TEST_CLASS, VerifyRejectsWhenPublicKeyHasInvalidSign) {
+		AssertVerifyRejects(VotingVerifyResult::Failure_Verification_Failed, [](auto& key, const auto&) {
+			key[0] ^= 0x20;
+		});
+	}
+
+	TEST(TEST_CLASS, VerifyRejectsWhenPublicKeyIsInvalidPoint) {
+		AssertVerifyRejects(VotingVerifyResult::Failure_Public_Key_Is_Invalid_Point, [](auto& key, const auto&) {
+			// prepare public key that does not result in valid point
+			key = VotingKey();
+			key[0] = 0x80;
+			key[47] = 1;
+		});
+		AssertVerifyRejects(VotingVerifyResult::Failure_Public_Key_Is_Invalid_Point, [](auto& key, const auto&) {
+			// prepare public key that does not result in valid point
+			key = VotingKey();
+			key[0] = 0xA0;
+			key[47] = 1;
+		});
+	}
+
+	TEST(TEST_CLASS, VerifyRejectsWhenPublicKeyIsNotInSubgroup) {
+		AssertVerifyRejects(VotingVerifyResult::Failure_Public_Key_Subgroup_Check, [](auto& key, const auto&) {
+			// prepare "zero" public key, this will result in valid point, but not in subgroup
+			key = VotingKey();
+			key[0] = 0x80;
+		});
+
+		AssertVerifyRejects(VotingVerifyResult::Failure_Public_Key_Subgroup_Check, [](auto& key, const auto&) {
+			// prepare "zero" public key, this will result in valid point, but not in subgroup
+			key = VotingKey();
+			key[0] = 0xA0;
+		});
+	}
+
+	namespace {
+		auto MakeNonCanonicalPublicKey(const VotingKey& originalKey) {
+			VotingKey key = originalKey;
+			BIG_384_58 modulus;
+			BIG_384_58_rcopy(modulus, Modulus_BLS381);
+
+			char bCopy[MODBYTES_384_58];
+			std::memcpy(bCopy, key.data(), MODBYTES_384_58);
+			key[0] &= Coordinate_Mask;
+
+			BIG_384_58 xb;
+			BIG_384_58_fromBytes(xb, bCopy);
+			BIG_384_58_add(xb, xb, modulus);
+			BIG_384_58_toBytes(reinterpret_cast<char*>(&key[0]), xb);
+
+			// fix flags
+			key[0] = key[0] | Compressed_Bit | 0x20;
+			return key;
+		}
+	}
+
+	TEST(TEST_CLASS, VerifyRejectsNonCanonicalPublicKey) {
+		// Arrange:
+		// last byte of a key pair has been selected, so that resulting public key is < 2^381
+		auto keyPair = VotingKeyPair::FromString("0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F07");
+		auto payload = std::array<uint8_t, 10>{ { 1, 2, 3, 4, 5, 6, 7, 8, 9, 0 } };
+		auto publicKey = keyPair.publicKey();
+		auto signature = SignPayload(keyPair, payload);
+
+		// Act:
+		auto nonCanonicalPublicKey = MakeNonCanonicalPublicKey(publicKey);
+		auto canonicalResult = crypto::Verify(publicKey, payload, signature);
+		auto nonCanonicalResult = crypto::Verify(nonCanonicalPublicKey, payload, signature);
+
+		// Assert:
+		EXPECT_EQ(VotingVerifyResult::Success, canonicalResult);
+		EXPECT_EQ(VotingVerifyResult::Failure_Public_Key_Not_Reduced, nonCanonicalResult);
 	}
 
 	// endregion

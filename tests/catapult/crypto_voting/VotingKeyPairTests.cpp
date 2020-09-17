@@ -20,30 +20,29 @@
 **/
 
 #include "catapult/crypto_voting/VotingKeyPair.h"
+#include "catapult/crypto/SecureRandomGenerator.h"
 #include "catapult/utils/HexParser.h"
+#include "tests/test/nodeps/RandomnessTestUtils.h"
 #include "tests/TestHarness.h"
 
 namespace catapult { namespace crypto {
 
 #define TEST_CLASS VotingKeyPairTests
 
-#define PUBLIC_KEY_PADDING "00000000000000000000000000000000"
+	// region VotingKeyPair
 
 	TEST(TEST_CLASS, KeyPairPassesNemTestVectors) {
-		// Arrange: from nem https://github.com/nemtech/test-vectors
+		// Arrange: based on milagro's example_ecdh_bls381
+		// https://github.com/apache/incubator-milagro-crypto-c/blob/develop/examples/example_ecdh_ZZZ.c.in
 		std::string dataSet[] {
-			"ED4C70D78104EB11BCD73EBDC512FEBC8FBCEB36A370C957FF7E266230BB5D57",
-			"FE9BC2EF8DF88E708CAB471F82B54DBFCBA11B121E7C2D02799AB4D3A53F0E5B",
-			"DAEE5A32E12CEDEFD0349FDBA1FCBDB45356CA3A35AA5CF1A8AE1091BBA98B73",
-			"A6954BAA315EE50453CCE3483906F134405B8B3ADD94BFC8D8125CF3C09BBFE8",
-			"832A237053A83B7E97CA287AC15F9AD5838898E7395967B56D39749652EA25C3"
+			"06A89AD2E96D5132670F01612D10F0C38923679C5D9449ADB4201BA9E37245F9",
+			"6C6DE1132EABAE9D3F42DF5D6E378EE588B8AEBD2D7B569AA973CD3DE908D843"
 		};
+
+		// skipping first byte from example and OR-ing with 0x80 or 0xA0 as needed
 		std::string expectedSet[] {
-			"5112BA143B78132AF616AF1A94E911EAD890FDB51B164A1B57C352ECD9CA1894" PUBLIC_KEY_PADDING,
-			"5F9EB725880D0B8AC122AD2939070172C8762713A1E29CE55EEEA0BFBA05E6DB" PUBLIC_KEY_PADDING,
-			"2D8C6B2B1D69CC02464339F46A788D7A5A6D7875C9D12AAD4ACCF2D5B24887FC" PUBLIC_KEY_PADDING,
-			"20E7F2BC716306F70A136121DC103604FD624328BCEA81E5786F3CB4CE96E60E" PUBLIC_KEY_PADDING,
-			"2470623117B439AA09C487D0F3D4B23676565DC1478F7C7443579B0255FE6DE1" PUBLIC_KEY_PADDING
+			"8428D6096DE4AF679FAC73B9558FB18556F249C1D70908378B1590DC0831D8ED391B2C2E2796DB4E681FB41E5B0BE99A",
+			"AF80009A642CA8FAAED086376C41EB6C926F466D31DE2E252B28CC0DA369C4BE49C449622E7CB4EB3175C4B2C1BC7EBE"
 		};
 
 		ASSERT_EQ(CountOf(dataSet), CountOf(expectedSet));
@@ -55,4 +54,48 @@ namespace catapult { namespace crypto {
 			EXPECT_EQ(utils::ParseByteArray<VotingKey>(expectedSet[i]), keyPair.publicKey());
 		}
 	}
+
+	namespace {
+		void AssertVotingKeyPairFailsForInvalidPrivateKey(const std::string& key) {
+			EXPECT_THROW(VotingKeyPair::FromString(key), catapult_invalid_argument);
+		}
+	}
+
+	TEST(TEST_CLASS, PublicKeyGenerationFailsForZeroPrivateKey) {
+		AssertVotingKeyPairFailsForInvalidPrivateKey("0000000000000000000000000000000000000000000000000000000000000000");
+	}
+
+	TEST(TEST_CLASS, PublicKeyGenerationFailsForPrivateKeyThatIsMultipleOfCurveOrder) {
+		AssertVotingKeyPairFailsForInvalidPrivateKey("73EDA753299D7D483339D80809A1D80553BDA402FFFE5BFEFFFFFFFF00000001");
+		AssertVotingKeyPairFailsForInvalidPrivateKey("E7DB4EA6533AFA906673B0101343B00AA77B4805FFFCB7FDFFFFFFFE00000002");
+	}
+
+	// endregion
+
+	// region GenerateVotingPrivateKey
+
+	namespace {
+		class WrappedVotingPrivateKeyGenerator {
+		public:
+			uint8_t operator()() {
+				if (VotingPrivateKey::Size == m_position) {
+					m_privateKey = GenerateVotingPrivateKey(m_rng);
+					m_position = 0;
+				}
+
+				return *(m_privateKey.data() + m_position++);
+			}
+
+		private:
+			SecureRandomGenerator m_rng;
+			VotingPrivateKey m_privateKey;
+			size_t m_position = VotingPrivateKey::Size;
+		};
+	}
+
+	TEST(TEST_CLASS, GenerateVotingPrivateKeyGeneratesRandomKey) {
+		test::RandomnessTestUtils::AssertExhibitsRandomness<WrappedVotingPrivateKeyGenerator>();
+	}
+
+	// endregion
 }}

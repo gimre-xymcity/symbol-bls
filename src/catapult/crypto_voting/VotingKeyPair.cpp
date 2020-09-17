@@ -1,5 +1,4 @@
 /**
-*** Copyright (c) 2016-2019, Jaguar0625, gimre, BloodyRookie, Tech Bureau, Corp.
 *** Copyright (c) 2020-present, Jaguar0625, gimre, BloodyRookie.
 *** All rights reserved.
 ***
@@ -21,10 +20,85 @@
 
 #include "VotingKeyPair.h"
 #include "catapult/crypto/KeyPair.h"
+#include "catapult/crypto/SecureRandomGenerator.h"
+#include "catapult/crypto/SecureZero.h"
+
+#if defined(__clang__) || defined(__GNUC__)
+#define C99
+#endif
+
+extern "C" {
+#include <amcl/config_curve_BLS381.h>
+#include <amcl/bls_BLS381.h>
+#include <amcl/big_512_56.h>
+}
 
 namespace catapult { namespace crypto {
 
+	namespace {
+		using ExtendedPrivateKeyBuffer = std::array<uint8_t, MODBYTES_384_58>;
+
+		constexpr size_t Private_Key_Offset = MODBYTES_384_58 - VotingPrivateKey::Size;
+
+		bool Big38458IsNegative(BIG_384_58 big) {
+			BIG_384_58 Half_Modulus = {
+				0xFF7FFFFFFFD555, 0x17FFFD62A7FFFF7, 0x29507B587B120F5, 0x309E70A257ECE61,
+				0x321A5D66BB23BA5, 0x32FFCD3496374F6, 0xD0088F51
+			};
+
+			return -1 == BIG_384_58_comp(Half_Modulus, big);
+		}
+
+		// G1
+		void ECP_BLS381_toReduced(VotingKey& g1Elem, const ECP_BLS381& point) {
+			BIG_384_58 x, y;
+			if (-1 == ECP_BLS381_get(x, y, const_cast<ECP_BLS381*>(&point)))
+				CATAPULT_THROW_INVALID_ARGUMENT("invalid private key used");
+
+			BIG_384_58_toBytes(reinterpret_cast<char*>(g1Elem.data()), x);
+
+			// TODO: check if we can use parity here instead
+			uint8_t maskValue = Big38458IsNegative(y) ? 0xA0 : 0x80;
+			g1Elem[0] = static_cast<uint8_t>(g1Elem[0] | maskValue);
+		}
+	}
+
+	VotingPrivateKey GenerateVotingPrivateKey(const supplier<uint64_t>& generator) {
+		ExtendedPrivateKeyBuffer privateKey;
+
+		DBIG_384_58 randomData;
+		BIG_384_58 secretKeyScalar;
+		BIG_384_58 order;
+		BIG_384_58_rcopy(order, CURVE_Order_BLS381);
+
+		// (D)BIG_384_58 uses 58-bits per each chunk
+		for (auto& chunk : randomData)
+			chunk = static_cast<__int64_t>(generator() & 0x3FFFFFF'FFFFFFFF);
+
+		BIG_384_58_dmod(secretKeyScalar, randomData, order);
+		BIG_384_58_toBytes(reinterpret_cast<char*>(privateKey.data()), secretKeyScalar);
+
+		SecureZero(randomData);
+		SecureZero(secretKeyScalar);
+		return VotingPrivateKey::FromBufferSecure({ privateKey.data() + Private_Key_Offset, VotingPrivateKey::Size });
+	}
+
 	void VotingKeyPairTraits::ExtractPublicKeyFromPrivateKey(const PrivateKey& privateKey, PublicKey& publicKey) {
-		publicKey = KeyPair::FromPrivate(crypto::PrivateKey::FromBuffer(privateKey)).publicKey().copyTo<VotingKey>();
+		ECP_BLS381 g;
+		ECP_BLS381_generator(&g);
+
+		// copy private key to larger buffer
+		ExtendedPrivateKeyBuffer extendedPrivateKey{};
+		std::memcpy(extendedPrivateKey.data() + Private_Key_Offset, privateKey.data(), VotingPrivateKey::Size);
+
+		// multiply private key times group generator
+		BIG_384_58 secretKeyScalar;
+		BIG_384_58_fromBytes(secretKeyScalar, reinterpret_cast<char*>(extendedPrivateKey.data()));
+		PAIR_BLS381_G1mul(&g, secretKeyScalar);
+
+		SecureZero(extendedPrivateKey);
+		SecureZero(secretKeyScalar);
+
+		ECP_BLS381_toReduced(publicKey, g);
 	}
 }}

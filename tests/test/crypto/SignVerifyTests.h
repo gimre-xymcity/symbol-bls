@@ -99,7 +99,7 @@ namespace catapult { namespace test {
 			auto signature = SignPayload(keyPair, payload);
 
 			// Act:
-			bool isVerified = crypto::Verify(keyPair.publicKey(), payload, signature);
+			bool isVerified = TTraits::CoerceToBool(crypto::Verify(keyPair.publicKey(), payload, signature));
 
 			// Assert:
 			EXPECT_TRUE(isVerified);
@@ -111,7 +111,7 @@ namespace catapult { namespace test {
 			auto signature = SignPayload(TTraits::GenerateKeyPair(), payload);
 
 			// Act:
-			bool isVerified = crypto::Verify(TTraits::GenerateKeyPair().publicKey(), payload, signature);
+			bool isVerified = TTraits::CoerceToBool(crypto::Verify(TTraits::GenerateKeyPair().publicKey(), payload, signature));
 
 			// Assert:
 			EXPECT_FALSE(isVerified);
@@ -127,7 +127,7 @@ namespace catapult { namespace test {
 			signature[position] ^= 0xFF;
 
 			// Act:
-			bool isVerified = crypto::Verify(keyPair.publicKey(), payload, signature);
+			bool isVerified = TTraits::CoerceToBool(crypto::Verify(keyPair.publicKey(), payload, signature));
 
 			// Assert:
 			EXPECT_FALSE(isVerified);
@@ -153,7 +153,7 @@ namespace catapult { namespace test {
 				payload[i] ^= 0xFF;
 
 				// Act:
-				bool isVerified = crypto::Verify(keyPair.publicKey(), payload, signature);
+				bool isVerified = TTraits::CoerceToBool(crypto::Verify(keyPair.publicKey(), payload, signature));
 
 				// Assert:
 				EXPECT_FALSE(isVerified);
@@ -173,7 +173,7 @@ namespace catapult { namespace test {
 			auto signature = SignPayload(hackedKeyPair, payload);
 
 			// Act:
-			bool isVerified = crypto::Verify(hackedKeyPair.publicKey(), payload, signature);
+			bool isVerified = TTraits::CoerceToBool(crypto::Verify(hackedKeyPair.publicKey(), payload, signature));
 
 			// Assert:
 			EXPECT_FALSE(isVerified);
@@ -193,7 +193,7 @@ namespace catapult { namespace test {
 			auto signature = SignPayload(hackedKeyPair, payload);
 
 			// Act:
-			bool isVerified = crypto::Verify(hackedKeyPair.publicKey(), payload, signature);
+			bool isVerified = TTraits::CoerceToBool(crypto::Verify(hackedKeyPair.publicKey(), payload, signature));
 
 			// Assert:
 			EXPECT_FALSE(isVerified);
@@ -213,7 +213,7 @@ namespace catapult { namespace test {
 			// Act:
 			// keep in mind, there's no good way to make this test, as right now, we have
 			// no way (and I don't think we need one), to check why verify failed
-			bool isVerified = crypto::Verify(hackedKeyPair.publicKey(), payload, signature);
+			bool isVerified = TTraits::CoerceToBool(crypto::Verify(hackedKeyPair.publicKey(), payload, signature));
 
 			// Assert:
 			EXPECT_FALSE(isVerified);
@@ -221,19 +221,23 @@ namespace catapult { namespace test {
 
 		static void AssertCannotVerifyNonCanonicalSignature() {
 			// Arrange:
-			auto payload = TTraits::GetPayloadForNonCanonicalSignatureTest();
+			auto payloads = TTraits::GetPayloadsForNonCanonicalSignatureTest();
+			auto keyPair = TTraits::GenerateKeyPairForNonCanonicalSignatureTest();
 
-			auto keyPair = TTraits::GenerateKeyPair();
-			auto canonicalSignature = SignPayload(keyPair, payload);
-			auto nonCanonicalSignature = TTraits::MakeNonCanonical(canonicalSignature);
+			size_t i = 0;
+			for (const auto& payload : payloads) {
+				auto canonicalSignature = SignPayload(keyPair, payload);
+				auto nonCanonicalSignature = TTraits::MakeNonCanonical(canonicalSignature, i);
 
-			// Act:
-			bool isCanonicalVerified = crypto::Verify(keyPair.publicKey(), payload, canonicalSignature);
-			bool isNonCanonicalVerified = crypto::Verify(keyPair.publicKey(), payload, nonCanonicalSignature);
+				// Act:
+				bool isCanonicalVerified = TTraits::CoerceToBool(crypto::Verify(keyPair.publicKey(), payload, canonicalSignature));
+				bool isNonCanonicalVerified = TTraits::CoerceToBool(crypto::Verify(keyPair.publicKey(), payload, nonCanonicalSignature));
 
-			// Assert:
-			EXPECT_TRUE(isCanonicalVerified);
-			EXPECT_FALSE(isNonCanonicalVerified);
+				// Assert:
+				EXPECT_TRUE(isCanonicalVerified) << i;
+				EXPECT_FALSE(isNonCanonicalVerified) << i;
+				++i;
+			}
 		}
 
 		// endregion

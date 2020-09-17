@@ -1,5 +1,4 @@
 /**
-*** Copyright (c) 2016-2019, Jaguar0625, gimre, BloodyRookie, Tech Bureau, Corp.
 *** Copyright (c) 2020-present, Jaguar0625, gimre, BloodyRookie.
 *** All rights reserved.
 ***
@@ -25,6 +24,39 @@
 
 namespace catapult { namespace crypto {
 
+	/// Voting verification error codes.
+	enum class VotingVerifyResult {
+		/// Success.
+		Success,
+
+		/// Invalid public key flags.
+		Failure_Invalid_Public_Key_Flags,
+
+		/// Public key coordinate is not reduced.
+		Failure_Public_Key_Not_Reduced,
+
+		/// Public key is invalid point.
+		Failure_Public_Key_Is_Invalid_Point,
+
+		/// Public key is not member of subgroup.
+		Failure_Public_Key_Subgroup_Check,
+
+		/// Invalid signature flags.
+		Failure_Invalid_Signature_Flags,
+
+		/// Signature coordinate(s) are not reduced.
+		Failure_Signature_Not_Reduced,
+
+		/// Signature is invalid point
+		Failure_Signature_Is_Invalid_Point,
+
+		/// Signature is not member of subgroup.
+		Failure_Signature_Subgroup_Check,
+
+		/// Signature is invalid.
+		Failure_Verification_Failed
+	};
+
 	/// Signs data pointed by \a dataBuffer using \a keyPair, placing resulting signature in \a computedSignature.
 	/// \note The function will throw if the generated S part of the signature is not less than the group order.
 	void Sign(const VotingKeyPair& keyPair, const RawBuffer& dataBuffer, VotingSignature& computedSignature);
@@ -35,9 +67,12 @@ namespace catapult { namespace crypto {
 
 	/// Verifies that \a signature of data pointed by \a dataBuffer is valid, using public key \a publicKey.
 	/// Returns \c true if signature is valid.
-	bool Verify(const VotingKey& publicKey, const RawBuffer& dataBuffer, const VotingSignature& signature);
+	VotingVerifyResult Verify(const VotingKey& publicKey, const RawBuffer& dataBuffer, const VotingSignature& signature);
 
 	/// Verifies that \a signature of data in \a buffersList is valid, using public key \a publicKey.
 	/// Returns \c true if signature is valid.
-	bool Verify(const VotingKey& publicKey, const std::vector<RawBuffer>& buffersList, const VotingSignature& signature);
+	VotingVerifyResult Verify(
+			const VotingKey& publicKey,
+			std::initializer_list<const RawBuffer> buffersList,
+			const VotingSignature& signature);
 }}

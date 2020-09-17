@@ -38,6 +38,8 @@ namespace catapult { namespace crypto {
 #define TEST_CLASS HashToCurveTests
 
 	namespace {
+		constexpr const char* Default_Dst_Name = "QUUX-V01-CS02-with-BLS12381G2_XMD:SHA-256_SSWU_RO_";
+
 		// region test vectors
 
 		struct TestVector {
@@ -166,7 +168,7 @@ namespace catapult { namespace crypto {
 			// Act:
 			RawBuffer buffer{ reinterpret_cast<const uint8_t*>(testVector.Message.data()), testVector.Message.size() };
 			G2Point point;
-			HashToCurveG2(point, { buffer });
+			HashToCurveG2(point, Default_Dst_Name, { buffer });
 
 			// Assert:
 			AssertPoint(point, testVector, i);

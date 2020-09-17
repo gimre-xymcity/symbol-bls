@@ -44,8 +44,6 @@ namespace catapult { namespace crypto {
 	// some of them actually require non-const objects, as they modify 'input' objects as well
 
 	namespace {
-		constexpr const char* Dst_Name = "QUUX-V01-CS02-with-BLS12381G2_XMD:SHA-256_SSWU_RO_";
-
 		// https://tools.ietf.org/html/draft-irtf-cfrg-hash-to-curve-08#section-5.1
 		// ceil((ceil(log2(p)) + k) / 8) = ceil((381 + 128) / 8) = 64
 		constexpr size_t Integer_Length = 64;
@@ -70,12 +68,11 @@ namespace catapult { namespace crypto {
 
 		// https://tools.ietf.org/html/draft-irtf-cfrg-hash-to-curve-08#section-5.2
 		// specialized hash_to_field, that produces two FP2 coordinates, as required by hash_to_curve
-		void HashToFieldFp2(FP2_BLS381 (&u)[2], std::initializer_list<const RawBuffer> buffersList) {
+		void HashToFieldFp2(FP2_BLS381 (&u)[2], const RawString& dstTag, std::initializer_list<const RawBuffer> buffersList) {
 			std::array<uint8_t, 4 * Integer_Length> buffer;
-			RawBuffer dst(reinterpret_cast<const uint8_t*>(Dst_Name), strlen(Dst_Name));
-			HashExpanderXmd<Sha256_Builder>::Expand(buffersList, dst, buffer);
+			HashExpanderXmd<Sha256_Builder>::Expand(buffersList, { reinterpret_cast<const uint8_t*>(dstTag.pData), dstTag.Size }, buffer);
 
-			// 4 points each 64bytes
+			// 4 coordinates each 64bytes
 			BIG_384_58 xa;
 			MapToEj(xa, buffer, 0 * Integer_Length);
 			BIG_384_58 xb;
@@ -93,7 +90,7 @@ namespace catapult { namespace crypto {
 		// https://tools.ietf.org/html/draft-irtf-cfrg-hash-to-curve-08#section-4.1
 		// sgn0_m_eq_2
 		bool Fp2Signum(FP2_BLS381& u) {
-			FP_BLS381& fieldElement = FP2_BLS381_iszilch(&u) ? u.b : u.a;
+			FP_BLS381& fieldElement = FP_BLS381_iszilch(&u.a) ? u.b : u.a;
 
 			BIG_384_58 big;
 			FP_BLS381_redc(big, &fieldElement);
@@ -323,26 +320,26 @@ namespace catapult { namespace crypto {
 				{ 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0 }
 			};
 
-			using FourPoints = FP2_BLS381[4];
-			using FourPointsPtr = FourPoints*;
+			using FourCoords = FP2_BLS381[4];
+			using FourCoordsPtr = FourCoords*;
 
-			FourPoints xNum;
+			FourCoords xNum;
 			for (auto i = 0u; i < Poly_Degree; ++i)
 				FP2_BLS381_from_BIGs(&xNum[i], xNumBigs[2 * i], xNumBigs[2 * i + 1]);
 
-			FourPoints xDen;
+			FourCoords xDen;
 			for (auto i = 0u; i < Poly_Degree; ++i)
 				FP2_BLS381_from_BIGs(&xDen[i], xDenBigs[2 * i], xDenBigs[2 * i + 1]);
 
-			FourPoints yNum;
+			FourCoords yNum;
 			for (auto i = 0u; i < Poly_Degree; ++i)
 				FP2_BLS381_from_BIGs(&yNum[i], yNumBigs[2 * i], yNumBigs[2 * i + 1]);
 
-			FourPoints yDen;
+			FourCoords yDen;
 			for (auto i = 0u; i < Poly_Degree; ++i)
 				FP2_BLS381_from_BIGs(&yDen[i], yDenBigs[2 * i], yDenBigs[2 * i + 1]);
 
-			FourPointsPtr polyCoefficients[]{
+			FourCoordsPtr polyCoefficients[]{
 				&xNum, &xDen, &yNum, &yDen
 			};
 
@@ -428,9 +425,9 @@ namespace catapult { namespace crypto {
 	}
 
 	// https://tools.ietf.org/html/draft-irtf-cfrg-hash-to-curve-08#section-3
-	void HashToCurveG2(G2Point& point, std::initializer_list<const RawBuffer> buffersList) {
+	void HashToCurveG2(G2Point& point, const RawString& dstTag, std::initializer_list<const RawBuffer> buffersList) {
 		FP2_BLS381 u[2];
-		HashToFieldFp2(u, buffersList);
+		HashToFieldFp2(u, dstTag, buffersList);
 
 		auto& p1 = point.ref<ECP2_BLS381>();
 		MapToCurve(p1, u[0]);

@@ -1,5 +1,4 @@
 /**
-*** Copyright (c) 2016-2019, Jaguar0625, gimre, BloodyRookie, Tech Bureau, Corp.
 *** Copyright (c) 2020-present, Jaguar0625, gimre, BloodyRookie.
 *** All rights reserved.
 ***
@@ -45,4 +44,7 @@ namespace catapult { namespace crypto {
 	/// BLS 381-12 key pair.
 	/// \note This key pair is used for voting messages.
 	using VotingKeyPair = BasicKeyPair<VotingKeyPairTraits>;
+
+	/// Generates voting private key using \a generator.
+	VotingPrivateKey GenerateVotingPrivateKey(const supplier<uint64_t>& generator);
 }}
