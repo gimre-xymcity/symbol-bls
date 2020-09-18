@@ -146,6 +146,46 @@ namespace catapult { namespace crypto {
 			}
 		};
 
+		struct Sha256_Traits {
+			using HashBuilder = Sha256_Builder;
+			using HashType = HashBuilder::OutputType;
+
+			static constexpr auto HashFunc = Sha256;
+
+			static std::string EmptyStringHash() {
+				return "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855";
+			}
+
+			// data taken from : https://opensource.apple.com/source/sudo/sudo-83/sudo/plugins/sudoers/regress/parser/check_digest.out.ok
+			static std::vector<std::string> SampleTestVectorsInput() {
+				return {
+					AsciiToHexString("a"),
+					AsciiToHexString("abc"),
+					AsciiToHexString("message digest"),
+					AsciiToHexString("abcdefghijklmnopqrstuvwxyz"),
+					AsciiToHexString("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+					AsciiToHexString("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"),
+					AsciiToHexString("12345678901234567890123456789012345678901234567890123456789012345678901234567890")
+				};
+			}
+
+			static std::vector<std::string> SampleTestVectorsOutput() {
+				return {
+					"CA978112CA1BBDCAFAC231B39A23DC4DA786EFF8147C4E72B9807785AFEE48BB",
+					"BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD",
+					"F7846F55CF23E14EEBEAB5B4E1550CAD5B509E3348FBC4EFA3A1413D393CB650",
+					"71C480DF93D6AE2F1EFAD1447C66C9525E316218CF51FC8D9ED832F2DAF18B73",
+					"248D6A61D20638B8E5C026930C3E6039A33CE45964FF2167F6ECEDD419DB06C1",
+					"DB4BFCBD4DA0CD85A60C3C37D3FBD8805C77F15FC6B1FDFE614EE0A7C8FDB4C0",
+					"F371BC4A311F2B009EEF952DD83CA80E2B60026C8E935592D0F9C308453C813E"
+				};
+			}
+
+			static std::string MillionTimesATestVector() {
+				return "CDC76E5C9914FB9281A1C7E284D73E67F1809A48A497200E046D39CCC7112CD0";
+			}
+		};
+
 		struct Sha512_Traits {
 			using HashBuilder = Sha512_Builder;
 			using HashType = HashBuilder::OutputType;
@@ -286,7 +326,7 @@ namespace catapult { namespace crypto {
 				TTraits::HashFunc(buffer, hash);
 
 				// Assert:
-				EXPECT_EQ(utils::ParseByteArray<typename TTraits::HashType>(expectedHashes[i]), hash);
+				EXPECT_EQ(utils::ParseByteArray<typename TTraits::HashType>(expectedHashes[i]), hash) << " at vector " << i;
 				++i;
 			}
 		}
@@ -332,6 +372,14 @@ namespace catapult { namespace crypto {
 	MAKE_HASH_TEST(Sha256Double, EmptyStringHasExpectedHash)
 	MAKE_HASH_TEST(Sha256Double, SampleTestVectors)
 	MAKE_HASH_TEST(Sha256Double, MillionTimesAHasExpectedHash)
+
+	// endregion
+
+	// region Sha256
+
+	MAKE_HASH_TEST(Sha256, EmptyStringHasExpectedHash)
+	MAKE_HASH_TEST(Sha256, SampleTestVectors)
+	MAKE_HASH_TEST(Sha256, MillionTimesAHasExpectedHash)
 
 	// endregion
 
@@ -549,6 +597,18 @@ namespace catapult { namespace crypto {
 					EXPECT_EQ(expected, result);
 			}
 		}
+	}
+
+	// endregion
+
+	// region Sha256 builder - tests
+
+	TEST(TEST_CLASS, Sha256_ConcatenatedMatchesSingleCallVariant) {
+		AssertConcatenatedHashMatchesSingleCallVariant<Sha256_Builder>(Sha256_Traits::HashFunc);
+	}
+
+	TEST(TEST_CLASS, Sha256_BuilderBasedMatchesSingleCallVariant) {
+		AssertBuilderBasedHashMatchesSingleCallVariant<Sha256_Builder>(Sha256_Traits::HashFunc);
 	}
 
 	// endregion

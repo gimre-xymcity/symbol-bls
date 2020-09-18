@@ -36,6 +36,9 @@ namespace catapult { namespace crypto {
 	/// Calculates the double sha256 hash of \a dataBuffer into \a hash.
 	void Sha256Double(const RawBuffer& dataBuffer, Hash256& hash);
 
+	/// Calculates the sha256 hash of \a dataBuffer into \a hash.
+	void Sha256(const RawBuffer& dataBuffer, Hash256& hash);
+
 	/// Calculates the sha512 hash of \a dataBuffer into \a hash.
 	void Sha512(const RawBuffer& dataBuffer, Hash512& hash);
 
@@ -56,10 +59,13 @@ namespace catapult { namespace crypto {
 	struct Sha3ModeTag {};
 
 	/// Builder for building a keccak hash.
-	template<typename TModeTag, typename THashTag>
+	template<typename TModeTag, typename THashTag, size_t Block_Size>
 	class HashBuilderT {
 	public:
 		using OutputType = utils::ByteArray<THashTag>;
+
+		/// Hash internal block size.
+		static constexpr size_t Hash_Block_Size = Block_Size;
 
 	public:
 		/// Creates a builder.
@@ -79,17 +85,21 @@ namespace catapult { namespace crypto {
 		OpensslDigestContext m_context;
 	};
 
+	/// Sha256_Builder.
+	using Sha256_Builder = HashBuilderT<Sha2ModeTag, Hash256_tag, 64>;
+	extern template class HashBuilderT<Sha2ModeTag, Hash256_tag, 64>;
+
 	/// Sha512_Builder.
-	using Sha512_Builder = HashBuilderT<Sha2ModeTag, Hash512_tag>;
-	extern template class HashBuilderT<Sha2ModeTag, Hash512_tag>;
+	using Sha512_Builder = HashBuilderT<Sha2ModeTag, Hash512_tag, 128>;
+	extern template class HashBuilderT<Sha2ModeTag, Hash512_tag, 128>;
 
 	/// Sha3_256_Builder.
-	using Sha3_256_Builder = HashBuilderT<Sha3ModeTag, Hash256_tag>;
-	extern template class HashBuilderT<Sha3ModeTag, Hash256_tag>;
+	using Sha3_256_Builder = HashBuilderT<Sha3ModeTag, Hash256_tag, 136>;
+	extern template class HashBuilderT<Sha3ModeTag, Hash256_tag, 136>;
 
 	/// GenerationHash_Builder.
-	using GenerationHash_Builder = HashBuilderT<Sha3ModeTag, GenerationHash_tag>;
-	extern template class HashBuilderT<Sha3ModeTag, GenerationHash_tag>;
+	using GenerationHash_Builder = HashBuilderT<Sha3ModeTag, GenerationHash_tag, 136>;
+	extern template class HashBuilderT<Sha3ModeTag, GenerationHash_tag, 136>;
 
 	// endregion
 }}
