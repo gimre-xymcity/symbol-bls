@@ -1,6 +1,7 @@
 [requires]
 # release dependencies
 boost/1.73.0
+milagro/2.0.1-nem@nemtech/stable
 openssl/1.1.1g@nemtech/stable
 
 # test dependencies
