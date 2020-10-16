@@ -37,10 +37,7 @@ extern "C" {
 namespace catapult { namespace crypto {
 
 	namespace {
-		using ExtendedPrivateKeyBuffer = std::array<uint8_t, MODBYTES_384_58>;
-
 		constexpr const char* Signing_Dst_Tag = "BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_NUL_";
-		constexpr size_t Private_Key_Offset = BGS_BLS381 - VotingPrivateKey::Size;
 		constexpr uint8_t Flags_Mask = 0xE0;
 		constexpr uint8_t Compressed_Bit = 0x80;
 		constexpr uint8_t Compressed_Sign_Bit = 0x20;
@@ -216,15 +213,12 @@ namespace catapult { namespace crypto {
 		G2Point qr;
 		HashToCurveG2(qr, Signing_Dst_Tag, buffersList);
 
-		// copy private key to larger buffer
-		ExtendedPrivateKeyBuffer extendedPrivateKey{};
-		std::memcpy(extendedPrivateKey.data() + Private_Key_Offset, keyPair.privateKey().data(), VotingPrivateKey::Size);
-
 		BIG_384_58 sk;
-		BIG_384_58_fromBytes(sk, reinterpret_cast<char*>(extendedPrivateKey.data()));
+		BIG_384_58_fromBytesLen(
+				sk,
+				const_cast<char*>(reinterpret_cast<const char*>(keyPair.privateKey().data())),
+				static_cast<int>(VotingPrivateKey::Size));
 		PAIR_BLS381_G2mul(qr.get<ECP2_BLS381>(), sk);
-
-		SecureZero(extendedPrivateKey);
 		SecureZero(sk);
 
 		// qr should be proper point, so this will always succeed

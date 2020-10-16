@@ -36,10 +36,6 @@ extern "C" {
 namespace catapult { namespace crypto {
 
 	namespace {
-		using ExtendedPrivateKeyBuffer = std::array<uint8_t, MODBYTES_384_58>;
-
-		constexpr size_t Private_Key_Offset = MODBYTES_384_58 - VotingPrivateKey::Size;
-
 		bool Big38458IsNegative(BIG_384_58 big) {
 			BIG_384_58 Half_Modulus = {
 				0xFF7FFFFFFFD555, 0x17FFFD62A7FFFF7, 0x29507B587B120F5, 0x309E70A257ECE61,
@@ -64,7 +60,7 @@ namespace catapult { namespace crypto {
 	}
 
 	VotingPrivateKey GenerateVotingPrivateKey(const supplier<uint64_t>& generator) {
-		ExtendedPrivateKeyBuffer privateKey;
+		std::array<uint8_t, MODBYTES_384_58> privateKeyBuffer;
 
 		DBIG_384_58 randomData;
 		BIG_384_58 secretKeyScalar;
@@ -76,27 +72,26 @@ namespace catapult { namespace crypto {
 			chunk = static_cast<__int64_t>(generator() & 0x3FFFFFF'FFFFFFFF);
 
 		BIG_384_58_dmod(secretKeyScalar, randomData, order);
-		BIG_384_58_toBytes(reinterpret_cast<char*>(privateKey.data()), secretKeyScalar);
-
 		SecureZero(randomData);
+
+		BIG_384_58_toBytes(reinterpret_cast<char*>(privateKeyBuffer.data()), secretKeyScalar);
 		SecureZero(secretKeyScalar);
-		return VotingPrivateKey::FromBufferSecure({ privateKey.data() + Private_Key_Offset, VotingPrivateKey::Size });
+
+		static constexpr size_t Private_Key_Offset = MODBYTES_384_58 - VotingPrivateKey::Size;
+		return VotingPrivateKey::FromBufferSecure({ privateKeyBuffer.data() + Private_Key_Offset, VotingPrivateKey::Size });
 	}
 
 	void VotingKeyPairTraits::ExtractPublicKeyFromPrivateKey(const PrivateKey& privateKey, PublicKey& publicKey) {
 		ECP_BLS381 g;
 		ECP_BLS381_generator(&g);
 
-		// copy private key to larger buffer
-		ExtendedPrivateKeyBuffer extendedPrivateKey{};
-		std::memcpy(extendedPrivateKey.data() + Private_Key_Offset, privateKey.data(), VotingPrivateKey::Size);
-
 		// multiply private key times group generator
 		BIG_384_58 secretKeyScalar;
-		BIG_384_58_fromBytes(secretKeyScalar, reinterpret_cast<char*>(extendedPrivateKey.data()));
+		BIG_384_58_fromBytesLen(
+				secretKeyScalar,
+				const_cast<char*>(reinterpret_cast<const char*>(privateKey.data())),
+				static_cast<int>(VotingPrivateKey::Size));
 		PAIR_BLS381_G1mul(&g, secretKeyScalar);
-
-		SecureZero(extendedPrivateKey);
 		SecureZero(secretKeyScalar);
 
 		ECP_BLS381_toReduced(publicKey, g);
