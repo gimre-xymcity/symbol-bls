@@ -21,5 +21,6 @@ function(catapult_bench_executable_target TARGET_NAME)
 endfunction()
 
 add_subdirectory(crypto)
+add_subdirectory(crypto_voting)
 
 add_subdirectory(nodeps)
