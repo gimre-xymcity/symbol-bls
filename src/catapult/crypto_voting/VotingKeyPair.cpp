@@ -23,7 +23,7 @@
 #include "catapult/crypto/SecureRandomGenerator.h"
 #include "catapult/crypto/SecureZero.h"
 
-#if defined(__clang__) || defined(__GNUC__)
+#if defined(__clang__) || defined(__GNUC__) || defined(_MSC_VER)
 #define C99
 #endif
 
@@ -32,6 +32,10 @@ extern "C" {
 #include <amcl/bls_BLS381.h>
 #include <amcl/big_512_56.h>
 }
+
+#include <stdint.h>
+
+using MsvcHackInt64t = int64_t;
 
 namespace catapult { namespace crypto {
 
@@ -69,7 +73,7 @@ namespace catapult { namespace crypto {
 
 		// (D)BIG_384_58 uses 58-bits per each chunk
 		for (auto& chunk : randomData)
-			chunk = static_cast<__int64_t>(generator() & 0x3FFFFFF'FFFFFFFF);
+			chunk = static_cast<MsvcHackInt64t>(generator() & 0x3FFFFFF'FFFFFFFF);
 
 		BIG_384_58_dmod(secretKeyScalar, randomData, order);
 		SecureZero(randomData);
